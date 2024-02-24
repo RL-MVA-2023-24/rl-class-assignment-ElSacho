@@ -33,17 +33,23 @@ class Model(nn.Module):
 class ProjectAgent:  
     def act(self, observation, use_random=False):
         if use_random:
-            return np.random.choice(4)
+            a = np.random.choice(4)
+            print(a)
+            return 
         else:
-            return greedy_action(self.model, observation)
+            a = greedy_action(self.model, observation)
+            print(a)
+            return a
         
 
     def save(self, path):
+        print("saving")
         torch.save({
                     'model_state_dict': self.model.state_dict(),
                     }, path)
 
     def load(self):
+        print("loading")
         # checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
         self.model = Model(50)
         # self.model.load_state_dict(checkpoint['model_state_dict'])

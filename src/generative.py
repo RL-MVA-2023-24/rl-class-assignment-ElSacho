@@ -21,12 +21,12 @@ import torch
 import torch.nn as nn
 from copy import deepcopy
 
-HIDDEN_SIZE = 50
+HIDDEN_SIZE = 24
 GENERATION_SIZE = 100
 GOAL_SCORE = 10_000_000_000
 MUTATIONS_RATE = [0, 0.2, 0.4, 0.9]
 MUTATION_DISTRIBUTION = [0, 0.25, 0.50, 0.75]
-MAX_GEN_NUMBER = 200
+MAX_GEN_NUMBER = 10_000_000
 GENETIC_PATH = "nn"
 
 class GenerationManager():
@@ -80,7 +80,7 @@ class GenerationManager():
         while self.generation_number < MAX_GEN_NUMBER and self.best_score < GOAL_SCORE:
             self.play()
             self.rank()
-            self.agents[0].save_model("nn/best_agent_path.pt")  
+            self.agents[0].save_model("nn/best_agent_path_02.pt")  
             self.best_score = max(self.best_score, self.agents[0].score)
             # if self.best_score >= GOAL_SCORE:
             #     if not self.test_best_score() : self.best_score -= 1
