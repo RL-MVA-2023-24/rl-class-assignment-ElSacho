@@ -203,7 +203,10 @@ class NeuralAgent(nn.Module):
 
     def save_model(self, file_path, agent_number = None):
         # if agent_number == None, we save the best model
-        torch.save(self.state_dict(), file_path)
+        # torch.save(self.state_dict(), file_path)
+        torch.save({
+                    'model_state_dict': self.target_model.state_dict()
+                    }, file_path)
         # if agent_number == None:
         #     torch.save(self.state_dict(), file_path)
         # # otherwise, we save all the models

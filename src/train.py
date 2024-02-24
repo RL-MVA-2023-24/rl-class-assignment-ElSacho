@@ -44,8 +44,11 @@ class ProjectAgent:
                     }, path)
 
     def load(self):
-        checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
+        # checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
         self.model = Model(50)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.model.eval()
+        # self.model.load_state_dict(checkpoint['model_state_dict'])
+        # self.model.eval()
         
+        etat_du_modele = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
+        self.model.load_state_dict(etat_du_modele)
+        self.model.eval()
