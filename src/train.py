@@ -1,21 +1,28 @@
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
+import random
+import torch
+import numpy as np
+import torch.nn as nn
+import matplotlib.pyplot as plt
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
-)  # The time wrapper limits the number of steps in an episode at 200.
-# Now is the floor is yours to implement the agent and train it.
-
-
-# You have to implement your own agent.
-# Don't modify the methods names and signatures, but you can add methods.
-# ENJOY!
-class ProjectAgent:
+def greedy_action(network, state):
+    device = "cuda" if next(network.parameters()).is_cuda else "cpu"
+    with torch.no_grad():
+        Q = network(torch.Tensor(state).unsqueeze(0).to(device))
+        return torch.argmax(Q).item()
+    
+class ProjectAgent:    
     def act(self, observation, use_random=False):
-        return 0
+        return greedy_action(self.model, observation)
 
     def save(self, path):
-        pass
+        torch.save({
+                    'model_state_dict': self.model.state_dict(),
+                    }, path)
 
     def load(self):
-        pass
+        checkpoint = torch.load("src/best_agent_path.pt")
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        
