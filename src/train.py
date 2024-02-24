@@ -4,7 +4,6 @@ import random
 import torch
 import numpy as np
 import torch.nn as nn
-import matplotlib.pyplot as plt
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def greedy_action(network, state):
@@ -15,7 +14,11 @@ def greedy_action(network, state):
     
 class ProjectAgent:    
     def act(self, observation, use_random=False):
-        return greedy_action(self.model, observation)
+        if use_random:
+            return np.random.choice(4)
+        else:
+            return greedy_action(self.model, observation)
+        
 
     def save(self, path):
         torch.save({
@@ -25,4 +28,5 @@ class ProjectAgent:
     def load(self):
         checkpoint = torch.load("src/best_agent_path.pt")
         self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.eval()
         
