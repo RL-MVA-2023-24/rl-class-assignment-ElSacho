@@ -22,7 +22,7 @@ class Model(nn.Module):
         self.output = nn.Linear(hidden_size, 4).to(self.device)
         
     def forward(self, x):
-        x = torch.from_numpy(x).to(self.device)
+        # x = torch.from_numpy(x).to(self.device)
         x = x.to(next(self.parameters()).dtype)
         x = F.relu(self.hidden(x))
         x = F.relu(self.hidden2(x))
