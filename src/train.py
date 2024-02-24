@@ -26,7 +26,7 @@ class ProjectAgent:
                     }, path)
 
     def load(self):
-        checkpoint = torch.load("src/best_agent_path.pt")
+        checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
         
