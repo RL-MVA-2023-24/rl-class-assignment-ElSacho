@@ -46,12 +46,11 @@ def greedy_action(network, state):
         return torch.argmax(Q).item()
 
 
-
 class dqn_agent:
     def __init__(self, config, model):
         device = "cuda" if next(model.parameters()).is_cuda else "cpu"
         self.nb_actions = config['nb_actions']
-        self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.95
+        self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
         self.batch_size = config['batch_size'] if 'batch_size' in config.keys() else 100
         buffer_size = config['buffer_size'] if 'buffer_size' in config.keys() else int(1e5)
         self.memory = ReplayBuffer(buffer_size,device)
@@ -70,7 +69,7 @@ class dqn_agent:
         self.update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
         self.update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
         self.monitoring_nb_trials = config['monitoring_nb_trials'] if 'monitoring_nb_trials' in config.keys() else 0
-        self.save_every = config['save_every'] if 'save_every' in config.keys() else 10
+        self.monitoring_freq = config['monitoring_freq'] if 'monitoring_freq' in config.keys() else 50
 
     def MC_eval(self, env, nb_trials):   # NEW NEW NEW
         MC_total_reward = []
@@ -111,33 +110,49 @@ class dqn_agent:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
-    
+        
     def train(self, env, max_episode):
         episode_return = []
-        MC_avg_total_reward = []   # NEW NEW NEW
-        MC_avg_discounted_reward = []   # NEW NEW NEW
-        V_init_state = []   # NEW NEW NEW
+        MC_avg_total_reward = []   # Monitoring variables
+        MC_avg_discounted_reward = []   # Monitoring variables
+        V_init_state = []   # Monitoring variables
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
         epsilon = self.epsilon_max
         step = 0
+        best_model = 0
+        n_step_buffer = []  # Buffer to store n-step transitions
+        self.n_step = 5
+
         while episode < max_episode:
             # update epsilon
             if step > self.epsilon_delay:
-                epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
+                epsilon = max(self.epsilon_min, epsilon - self.epsilon_step)
+
             # select epsilon-greedy action
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
                 action = greedy_action(self.model, state)
+
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            self.memory.append(state, action, reward, next_state, done)
+            n_step_buffer.append((state, action, reward, next_state, done))
+
+            if len(n_step_buffer) >= self.n_step or done or trunc:
+                R = sum([n_step_buffer[i][2] * (self.gamma ** i) for i in range(len(n_step_buffer))])
+                n_state, n_action, _, _, _ = n_step_buffer[0]
+                _, _, _, n_next_state, n_done = n_step_buffer[-1]
+                self.memory.append(n_state, n_action, R, n_next_state, n_done)
+                
+
             episode_cum_reward += reward
+
             # train
-            for _ in range(self.nb_gradient_steps): 
+            for _ in range(self.nb_gradient_steps):
                 self.gradient_step()
+
             # update target network if needed
             if self.update_target_strategy == 'replace':
                 if step % self.update_target_freq == 0: 
@@ -149,47 +164,24 @@ class dqn_agent:
                 for key in model_state_dict:
                     target_state_dict[key] = tau*model_state_dict + (1-tau)*target_state_dict
                 self.target_model.load_state_dict(target_state_dict)
+
             # next transition
             step += 1
             if done or trunc:
-                episode += 1
-                # Monitoring
-                if self.monitoring_nb_trials>0:
-                    MC_dr, MC_tr = self.MC_eval(env, self.monitoring_nb_trials)    # NEW NEW NEW
-                    V0 = self.V_initial_state(env, self.monitoring_nb_trials)   # NEW NEW NEW
-                    MC_avg_total_reward.append(MC_tr)   # NEW NEW NEW
-                    MC_avg_discounted_reward.append(MC_dr)   # NEW NEW NEW
-                    V_init_state.append(V0)   # NEW NEW NEW
-                    episode_return.append(episode_cum_reward)   # NEW NEW NEW
-                    print("Episode ", '{:2d}'.format(episode), 
-                          ", epsilon ", '{:6.2f}'.format(epsilon), 
-                          ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
-                          ", MC tot ", '{:6.2f}'.format(MC_tr),
-                          ", MC disc ", '{:6.2f}'.format(MC_dr),
-                          ", V0 ", '{:6.2f}'.format(V0),
-                          sep='')
-                else:
-                    episode_return.append(episode_cum_reward)
-                    print("Episode ", '{:2d}'.format(episode), 
-                          ", epsilon ", '{:6.2f}'.format(epsilon), 
-                          ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
-                          sep='')
-                    
-                if (episode + 1) % self.save_every == 0:
-                    torch.save({
-                    'model_state_dict': self.target_model.state_dict(),
-                    # 'optimizer_state_dict': optimizer.state_dict(),
-                    'reward': episode_cum_reward,
-                    }, f"{episode}_test.pt")
-                
                 state, _ = env.reset()
+                print("Episode ", '{:2d}'.format(episode), 
+                          ", epsilon ", '{:6.2f}'.format(epsilon), 
+                          ", batch size ", '{:4d}'.format(len(self.memory)), 
+                          ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
+                          sep='')
                 episode_cum_reward = 0
+                episode += 1
+                n_step_buffer = []  # Reset n-step buffer
             else:
                 state = next_state
-            
+
         return episode_return, MC_avg_discounted_reward, MC_avg_total_reward, V_init_state
+
     
 # Declare network
 state_dim = env.observation_space.shape[0]
@@ -204,27 +196,43 @@ DQN = torch.nn.Sequential(nn.Linear(state_dim, nb_neurons),
                           nn.ReLU(),
                           nn.Linear(nb_neurons, n_action)).to(device)
 
+class DQM_model(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, depth = 2):
+        super(DQM_model, self).__init__()
+        self.input_layer = torch.nn.Linear(input_dim, hidden_dim)
+        self.hidden_layers = torch.nn.ModuleList([torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(depth - 1)])
+        self.output_layer = torch.nn.Linear(hidden_dim, output_dim)
+        self.activation = torch.nn.ReLU()
+        
+    def forward(self, x):
+        x = self.activation(self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = self.activation(layer(x))
+        return self.output_layer(x)
+
+model = DQM_model(6, 256, 4, 6).to(device)
 # DQN config
 config = {'nb_actions': env.action_space.n,
-          'learning_rate': 5e-4,
+          'learning_rate': 0.001,
           'gamma': 0.99,
           'buffer_size': 1_000_000,
           'epsilon_min': 0.01,
           'epsilon_max': 1.,
-          'epsilon_decay_period': 10_000,
-          'epsilon_delay_decay': 200,
-          'batch_size': 20,
-          'gradient_steps': 5,
+          'epsilon_decay_period': 15_000,
+          'epsilon_delay_decay': 4_000,
+          'batch_size': 1000,
+          'gradient_steps': 1,
           'update_target_strategy': 'replace', # or 'ema'
-          'update_target_freq': 200,
+          'update_target_freq': 400,
           'update_target_tau': 0.005,
           'criterion': torch.nn.SmoothL1Loss(),
-          'monitoring_nb_trials': 50,
+          'monitoring_nb_trials': 1,
+          'monitoring_freq' : 50,
           'save_every': 10}
 
 # Train agent
-agent = dqn_agent(config, DQN)
-ep_length, disc_rewards, tot_rewards, V0 = agent.train(env, 200)
+agent = dqn_agent(config, model)
+ep_length, disc_rewards, tot_rewards, V0 = agent.train(env, 2000)
 plt.plot(ep_length, label="training episode length")
 plt.plot(tot_rewards, label="MC eval of total reward")
 plt.legend()

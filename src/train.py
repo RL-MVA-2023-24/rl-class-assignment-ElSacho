@@ -13,6 +13,20 @@ def greedy_action(network, state):
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
     
+class DQM_model(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, depth):
+        super(DQM_model, self).__init__()
+        self.input_layer = torch.nn.Linear(input_dim, hidden_dim)
+        self.hidden_layers = torch.nn.ModuleList([torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(depth - 1)])
+        self.output_layer = torch.nn.Linear(hidden_dim, output_dim)
+        self.activation = torch.nn.ReLU()
+        
+    def forward(self, x):
+        x = self.activation(self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = self.activation(layer(x))
+        return self.output_layer(x)
+    
 class Model(nn.Module):
     def __init__(self, hidden_size):
         super(Model, self).__init__()
@@ -34,14 +48,13 @@ class ProjectAgent:
     def act(self, observation, use_random=False):
         if use_random:
             a = np.random.choice(4)
-            print(a)
-            return 
+            # print(a)
+            return a
         else:
             a = greedy_action(self.model, observation)
-            print(a)
+            # print(a)
             return a
         
-
     def save(self, path):
         print("saving")
         torch.save({
@@ -50,11 +63,11 @@ class ProjectAgent:
 
     def load(self):
         print("loading")
-        # checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
-        self.model = Model(50)
-        # self.model.load_state_dict(checkpoint['model_state_dict'])
-        # self.model.eval()
-        
-        etat_du_modele = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
-        self.model.load_state_dict(etat_du_modele)
+        checkpoint = torch.load("src/best_agent_path.pt", map_location=torch.device('cpu'))
+        self.model = DQM_model(6, 256, 4, 6).to(device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
+        
+        # etat_du_modele = torch.load("src/DQN_simple.pt", map_location=torch.device('cpu'))
+        # self.model.load_state_dict(etat_du_modele)
+        # self.model.eval()
