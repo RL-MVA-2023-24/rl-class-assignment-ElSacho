@@ -158,6 +158,7 @@ class dqn_agent:
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.n_step_return = config['n_step_return'] if 'n_step_return' in config.keys() else 1
         self.model = model 
+        self.noisy = config['noisy'] if 'noisy' in config.keys() else False
         self.target_model = deepcopy(self.model).to(device)
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
         lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
@@ -206,13 +207,16 @@ class dqn_agent:
         
         while episode < max_episode:
             # update epsilon
-            if step > self.epsilon_delay:
-                epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
-            # select epsilon-greedy action
-            if np.random.rand() < epsilon:
-                action = env.action_space.sample()
+            if not self.noisy:
+                if step > self.epsilon_delay:
+                    epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
+                # select epsilon-greedy action
+                if np.random.rand() < epsilon:
+                    action = env.action_space.sample()
+                else:
+                    action = greedy_action(self.model, state)
             else:
-                action = greedy_action(self.model, state)
+                continue
             # step
             next_state, reward, done, trunc, _ = env.step(action)
             # self.buffer.append(state, action, next_state, reward, done)
@@ -276,7 +280,7 @@ class dqn_agent:
             return np.random.choice(self.env.action_space.n)
         return greedy_action(self.model, observation)
     
-    def save(self, path = "prioritez_replay_r=f.pt"):
+    def save(self, path = "prioritez_replay.pt"):
         torch.save({
                     'model_state_dict': self.model.state_dict()
                     }, path)
@@ -323,27 +327,10 @@ config = {'nb_actions': env.action_space.n,
           'update_target_tau': 0.005,
           'prioritized': False,
           'n_step_return': 5,
-          'criterion': torch.nn.SmoothL1Loss()
-          }
-
-config = {'nb_actions': env.action_space.n,
-          'learning_rate': 0.001,
-          'gamma': 0.99,
-          'buffer_size': 100_000,
-          'epsilon_min': 0.01,
-          'epsilon_max': 1.,
-          'epsilon_decay_period': 50_000,
-          'epsilon_delay_decay': 5_000,
-          'batch_size': 1000,
-          'gradient_steps': 3,
-          'update_target_strategy': 'replace', # or 'ema' # or 'replace'
-          'update_target_freq': 400,
-          'update_target_tau': 0.005,
-          'prioritized': False,
-          'n_step_return': 5,
+          'noisy': False,
           'criterion': torch.nn.SmoothL1Loss()
           }
 
 # Train agent
 agent = dqn_agent(config, model)
-ep_length = agent.train(env, 200000)
+ep_length = agent.train(env, 2000)
