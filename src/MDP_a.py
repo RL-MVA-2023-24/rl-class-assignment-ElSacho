@@ -14,132 +14,49 @@ from copy import deepcopy
 import locale
 locale.setlocale(locale.LC_ALL, 'fr_FR')  # Définir la locale en français
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
-)  # The time wrapper limits the number of steps in an episode at 200.
-# Now is the floor is yours to implement the agent and train it.
 
 
-class PrioritizedStandardBuffer():
-	def __init__(self, state_dim, batch_size, buffer_size, device, prioritized):
-		self.batch_size = batch_size
-		self.max_size = int(buffer_size)
-		self.device = device
-
-		self.ptr = 0
-		self.size = 0
-
-		self.state = np.zeros((self.max_size, state_dim))
-		self.action = np.zeros((self.max_size, 1))
-		self.next_state = np.array(self.state)
-		self.reward = np.zeros((self.max_size, 1))
-		self.not_done = np.zeros((self.max_size, 1))
-
-		self.prioritized = prioritized
-
-		if self.prioritized:
-			self.tree = SumTree(self.max_size)
-			self.max_priority = 1.0
-			self.beta = 0.4
-
-
-	def append(self, state, action, next_state, reward, done):
-		self.state[self.ptr] = state
-		self.action[self.ptr] = action
-		self.next_state[self.ptr] = next_state
-		self.reward[self.ptr] = reward
-		self.not_done[self.ptr] = 1. - done
-
-		if self.prioritized:
-			self.tree.set(self.ptr, self.max_priority)
-		
-		self.ptr = (self.ptr + 1) % self.max_size
-		self.size = min(self.size + 1, self.max_size)
-
-
-	def sample(self):
-		ind = self.tree.sample(self.batch_size) if self.prioritized \
-			else np.random.randint(0, self.size, size=self.batch_size)
-
-		batch = (
-			torch.FloatTensor(self.state[ind]).to(self.device),
-			torch.LongTensor(self.action[ind]).to(self.device),
-			torch.FloatTensor(self.next_state[ind]).to(self.device),
-			torch.FloatTensor(self.reward[ind]).to(self.device),
-			torch.FloatTensor(self.not_done[ind]).to(self.device)
-		)
-
-		if self.prioritized:
-			weights = np.array(self.tree.nodes[-1][ind]) ** -self.beta
-			weights /= weights.max()
-			self.beta = min(self.beta + 2e-7, 1) # Hardcoded: 0.4 + 2e-7 * 3e6 = 1.0. Only used by PER.
-			batch += (ind, torch.FloatTensor(weights).to(self.device).reshape(-1, 1))
-    
-		return batch 
-
-
-	def update_priority(self, ind, priority):
-		self.max_priority = max(priority.max(), self.max_priority)
-		self.tree.batch_set(ind, priority)
-
-
-class SumTree(object):
-	def __init__(self, max_size):
-		self.nodes = []
-		# Tree construction
-		# Double the number of nodes at each level
-		level_size = 1
-		for _ in range(int(np.ceil(np.log2(max_size))) + 1):
-			nodes = np.zeros(level_size)
-			self.nodes.append(nodes)
-			level_size *= 2
-
-
-	# Batch binary search through sum tree
-	# Sample a priority between 0 and the max priority
-	# and then search the tree for the corresponding index
-	def sample(self, batch_size):
-		query_value = np.random.uniform(0, self.nodes[0][0], size=batch_size)
-		node_index = np.zeros(batch_size, dtype=int)
-		
-		for nodes in self.nodes[1:]:
-			node_index *= 2
-			left_sum = nodes[node_index]
-			
-			is_greater = np.greater(query_value, left_sum)
-			# If query_value > left_sum -> go right (+1), else go left (+0)
-			node_index += is_greater
-			# If we go right, we only need to consider the values in the right tree
-			# so we subtract the sum of values in the left tree
-			query_value -= left_sum * is_greater
-		
-		return node_index
-
-
-	def set(self, node_index, new_priority):
-		priority_diff = new_priority - self.nodes[-1][node_index]
-
-		for nodes in self.nodes[::-1]:
-			np.add.at(nodes, node_index, priority_diff)
-			node_index //= 2
-
-
-	def batch_set(self, node_index, new_priority):
-		# Confirm we don't increment a node twice
-		node_index, unique_index = np.unique(node_index, return_index=True)
-		priority_diff = new_priority[unique_index] - self.nodes[-1][node_index]
-		
-		for nodes in self.nodes[::-1]:
-			np.add.at(nodes, node_index, priority_diff)
-			node_index //= 2
+class ReplayBuffer:
+    def __init__(self, capacity, device):
+        self.capacity = int(capacity) # capacity of the buffer
+        self.data = []
+        self.index = 0 # index of the next cell to be filled
+        self.device = device
+    def append(self, s, a, r, s_, d):
+        if len(self.data) < self.capacity:
+            self.data.append(None)
+        self.data[self.index] = (s, a, r, s_, d)
+        self.index = (self.index + 1) % self.capacity
+    def sample(self, batch_size):
+        batch = random.sample(self.data, batch_size)
+        return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+    def __len__(self):
+        return len(self.data)
     
 def greedy_action(network, state):
     device = "cuda" if next(network.parameters()).is_cuda else "cpu"
     with torch.no_grad():
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
+
+class tab_state:
+    def __init__(self, obs_size, n_state_to_agg):
+        self.obs_size = obs_size
+        self.n_state_to_agg = n_state_to_agg
+        self.tab_state = np.zeros(self.obs_size * self.n_state_to_agg)
+        
+    def push(self, state):
+        # Shift the existing state data to the left by one state's worth of data
+        for i in range(self.n_state_to_agg - 1):
+            self.tab_state[i * self.obs_size: (i + 1) * self.obs_size] = self.tab_state[(i + 1) * self.obs_size: (i + 2) * self.obs_size]
+        
+        # Insert the new state at the end
+        self.tab_state[(self.n_state_to_agg - 1) * self.obs_size: self.n_state_to_agg * self.obs_size] = state
+
+        
+    def reset(self):
+        self.tab_state = np.zeros(self.obs_size * self.n_state_to_agg)
+        
 
 
 class dqn_agent:
@@ -149,13 +66,14 @@ class dqn_agent:
         self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
         self.batch_size = config['batch_size'] if 'batch_size' in config.keys() else 100
         buffer_size = config['buffer_size'] if 'buffer_size' in config.keys() else int(1e5)
-        self.memory = PrioritizedStandardBuffer(6, self.batch_size, buffer_size, device, True)
+        self.memory = ReplayBuffer(buffer_size,device)
         self.epsilon_max = config['epsilon_max'] if 'epsilon_max' in config.keys() else 1.
         self.epsilon_min = config['epsilon_min'] if 'epsilon_min' in config.keys() else 0.01
         self.epsilon_stop = config['epsilon_decay_period'] if 'epsilon_decay_period' in config.keys() else 1000
         self.epsilon_delay = config['epsilon_delay_decay'] if 'epsilon_delay_decay' in config.keys() else 20
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
         self.model = model 
+        self.obs_space = config['obs_space'] if 'obs_space' in config.keys() else 6
         self.target_model = deepcopy(self.model).to(device)
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
         lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
@@ -164,39 +82,33 @@ class dqn_agent:
         self.update_target_strategy = config['update_target_strategy'] if 'update_target_strategy' in config.keys() else 'replace'
         self.update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
         self.update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
+        self.n_state_to_agg = config['n_state_to_agg'] if 'n_state_to_agg' in config.keys() else 1
         
 
     def gradient_step(self):
-        if self.memory.size > self.batch_size:
-            state, action, next_state, reward, done, ind, weights = self.memory.sample()
-            with torch.no_grad():
-                next_action = self.model(next_state).argmax(1, keepdim=True)
-                update = (
-                    reward + done * self.gamma *
-                    self.target_model(next_state).gather(1, next_action).reshape(-1, 1)
-                )
-                
-            current_Q = self.model(state).gather(1, action)
-
-            # Compute Q loss
-            if self.memory.prioritized:
-                Q_loss = (weights * self.criterion(current_Q, update)).mean()
-            else:
-                Q_loss = (self.criterion(current_Q, update)).mean()
-            # Optimize the Q network
+        if len(self.memory) > self.batch_size:
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
+            QYmax = self.target_model(Y).max(1)[0].detach()
+            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            loss = self.criterion(QXA, update.unsqueeze(1))
             self.optimizer.zero_grad()
-            Q_loss.backward()
-            self.optimizer.step()
-            if self.memory.prioritized:
-                priority = ((current_Q - update).abs() + 1e-10).pow(0.6).cpu().data.numpy().flatten()
-                self.memory.update_priority(ind, priority)
-        
+            loss.backward()
+            self.optimizer.step() 
     
     def train(self, env, max_episode):
         episode_return = []
         episode = 0
         episode_cum_reward = 0
+        obs_space = self.obs_space
+        best_score = 0
+        states = tab_state(obs_space, self.n_state_to_agg)
+        step_ep = 0
         state, _ = env.reset()
+        last_action = 0
+        state_a = np.zeros(4+6)
+        state_a[:6] = state
+        states.push(state)
         epsilon = self.epsilon_max
         step = 0
         best_model = 0
@@ -208,10 +120,32 @@ class dqn_agent:
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
-                action = greedy_action(self.model, state)
+                # action = greedy_action(self.model, states.tab_state)
+                if self.n_state_to_agg == 1:
+                    action = greedy_action(self.model, state)
+                else:
+                    state_a[5 + last_action] = 1
+                    state_a[:6] = state
+                    action = greedy_action(self.model, state_a)
+                    # action = greedy_action(self.model, states.tab_state)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            self.memory.append(state, action, next_state, reward, done)
+            # reward *= 1e-6
+            last_action = action
+            next_state_a = np.zeros(4+6)
+            next_state_a[5 + last_action] = 1
+            next_state_a[:6] = next_state
+            # last_states = states.tab_state.copy()
+            # state *= 1e-3
+            states.push(next_state)
+            step_ep += 1
+            step_ep = step_ep % self.n_state_to_agg
+            # self.memory.append(last_states, action, reward, states.tab_state, done)
+            if self.n_state_to_agg == 1:
+                self.memory.append(state, action, reward, next_state, done)
+            else:
+                self.memory.append(next_state_a, action, reward, state_a, done)
+                # self.memory.append(last_states, action, reward, states.tab_state, done)
             episode_cum_reward += reward
             # train
             for _ in range(self.nb_gradient_steps): 
@@ -235,18 +169,25 @@ class dqn_agent:
                 episode_return.append(episode_cum_reward)
                 print("Episode ", '{:2d}'.format(episode), 
                         ", epsilon ", '{:6.2f}'.format(epsilon), 
-                        ", batch size ", '{:4d}'.format(self.memory.size), 
+                        ", batch size ", '{:4d}'.format(len(self.memory)), 
                         ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
                         sep='')
-                    
-                score_agent: float = evaluate_HIV(agent=self, nb_episode=1)
-                print(locale.format_string('%d', int(score_agent), grouping=True))
-                if score_agent > best_model:
-                    agent.save()
-                    best_model = score_agent
                 
                 state, _ = env.reset()
+                last_action = 0
+                state_a[:6] = state
+                states.reset()
+                # state *= 1e-3
+                states.push(state)
                 episode_cum_reward = 0
+                try:
+                    score_agent: float = evaluate_HIV(agent=self, nb_episode=1)
+                    print(locale.format_string('%d', int(score_agent), grouping=True))
+                    if score_agent > best_score:
+                        agent.save()
+                        best_score = score_agent
+                except:
+                    print("could not test the model")
             else:
                 state = next_state
             
@@ -257,21 +198,16 @@ class dqn_agent:
             return np.random.choice(self.env.action_space.n)
         return greedy_action(self.model, observation)
     
-    def save(self, path = "prioritez_replay.pt"):
+    def save(self, path = "DQN_simple.pt"):
         torch.save({
                     'model_state_dict': self.model.state_dict()
                     }, path)
 
     def load(self):
-        path = "prioritez_replay.pt"
+        path = "DQN_simple.pt"
         self.model = DQM_model(6*config['n_state_to_agg'], 256, 4, 6).to(device)
         self.model.load_state_dict(torch.load(path)['model_state_dict'])
     
-# Declare network
-state_dim = env.observation_space.shape[0]
-n_action = env.action_space.n 
-nb_neurons= 24
-
 
 class DQM_model(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, depth):
@@ -287,24 +223,66 @@ class DQM_model(torch.nn.Module):
             x = self.activation(layer(x))
         return self.output_layer(x)
 
-model = DQM_model(6, 256, 4, 6).to(device)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+env = TimeLimit(
+    env=HIVPatient(domain_randomization=False), max_episode_steps=200
+)  # The time wrapper limits the number of steps in an episode at 200.
+# Now is the floor is yours to implement the agent and train it.
+
+# import gymnasium as gym
+# env = gym.make('CartPole-v1', render_mode="rgb_array")
+# import torch
+# import torch.nn as nn
+# import matplotlib.pyplot as plt
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# Declare network
+state_dim = env.observation_space.shape[0]
+n_action = env.action_space.n 
+nb_neurons= 24
 # DQN config
 config = {'nb_actions': env.action_space.n,
           'learning_rate': 0.001,
           'gamma': 0.99,
-          'buffer_size': 100_000,
+          'buffer_size': 40_000,
           'epsilon_min': 0.01,
           'epsilon_max': 1.,
-          'epsilon_decay_period': 30_000,
-          'epsilon_delay_decay': 5_000,
+          'epsilon_decay_period': 15_000,
+          'epsilon_delay_decay': 4_000,
           'batch_size': 500,
           'gradient_steps': 3,
           'update_target_strategy': 'replace', # or 'ema'
           'update_target_freq': 400,
           'update_target_tau': 0.005,
-          'criterion': torch.nn.SmoothL1Loss()
+          'obs_space' : state_dim,
+          'criterion': torch.nn.MSELoss(),
+          'n_state_to_agg': 2
           }
+
+# config = {'nb_actions': env.action_space.n,
+#           'learning_rate': 0.001,
+#           'gamma': 0.99,
+#           'buffer_size': 20_000,
+#           'epsilon_min': 0.01,
+#           'epsilon_max': 1.,
+#           'epsilon_decay_period': 2_000,
+#           'epsilon_delay_decay': 300,
+#           'batch_size': 10,
+#           'gradient_steps': 3,
+#           'update_target_strategy': 'replace', # or 'ema'
+#           'update_target_freq': 400,
+#           'update_target_tau': 0.005,
+#           'obs_space' : state_dim,
+#           'criterion': torch.nn.MSELoss(),
+#           'n_state_to_agg': 1
+#           }
+
+
+model = DQM_model(10, 256, n_action, 6).to(device)
 
 # Train agent
 agent = dqn_agent(config, model)
-ep_length = agent.train(env, 2000)
+scores = agent.train(env, 200)
+plt.plot(scores)

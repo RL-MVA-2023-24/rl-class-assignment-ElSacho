@@ -63,7 +63,7 @@ class ProjectAgent:
 
     def load(self):
         print("loading")
-        checkpoint = torch.load("src/DQN_simple.pt", map_location=torch.device('cpu'))
+        checkpoint = torch.load("src/prioritez_replay.pt", map_location=torch.device('cpu'))
         self.model = DQM_model(6, 256, 4, 6).to(device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()

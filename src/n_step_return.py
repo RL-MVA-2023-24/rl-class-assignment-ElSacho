@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from copy import deepcopy
 import locale
+from collections import deque
 locale.setlocale(locale.LC_ALL, 'fr_FR')  # Définir la locale en français
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,13 +78,12 @@ class PrioritizedStandardBuffer():
 			self.beta = min(self.beta + 2e-7, 1) # Hardcoded: 0.4 + 2e-7 * 3e6 = 1.0. Only used by PER.
 			batch += (ind, torch.FloatTensor(weights).to(self.device).reshape(-1, 1))
     
-		return batch 
+		return batch + (None, None)
 
 
 	def update_priority(self, ind, priority):
 		self.max_priority = max(priority.max(), self.max_priority)
 		self.tree.batch_set(ind, priority)
-
 
 class SumTree(object):
 	def __init__(self, max_size):
@@ -149,12 +149,14 @@ class dqn_agent:
         self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
         self.batch_size = config['batch_size'] if 'batch_size' in config.keys() else 100
         buffer_size = config['buffer_size'] if 'buffer_size' in config.keys() else int(1e5)
-        self.memory = PrioritizedStandardBuffer(6, self.batch_size, buffer_size, device, True)
+        self.prioritized = config['prioritized'] if 'prioritized' in config.keys() else True
+        self.buffer = PrioritizedStandardBuffer(6, self.batch_size, buffer_size, device, self.prioritized)
         self.epsilon_max = config['epsilon_max'] if 'epsilon_max' in config.keys() else 1.
         self.epsilon_min = config['epsilon_min'] if 'epsilon_min' in config.keys() else 0.01
         self.epsilon_stop = config['epsilon_decay_period'] if 'epsilon_decay_period' in config.keys() else 1000
         self.epsilon_delay = config['epsilon_delay_decay'] if 'epsilon_delay_decay' in config.keys() else 20
         self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
+        self.n_step_return = config['n_step_return'] if 'n_step_return' in config.keys() else 1
         self.model = model 
         self.target_model = deepcopy(self.model).to(device)
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
@@ -167,8 +169,8 @@ class dqn_agent:
         
 
     def gradient_step(self):
-        if self.memory.size > self.batch_size:
-            state, action, next_state, reward, done, ind, weights = self.memory.sample()
+        if self.buffer.size > self.batch_size:
+            state, action, next_state, reward, done, ind, weights = self.buffer.sample()
             with torch.no_grad():
                 next_action = self.model(next_state).argmax(1, keepdim=True)
                 update = (
@@ -179,7 +181,7 @@ class dqn_agent:
             current_Q = self.model(state).gather(1, action)
 
             # Compute Q loss
-            if self.memory.prioritized:
+            if self.buffer.prioritized:
                 Q_loss = (weights * self.criterion(current_Q, update)).mean()
             else:
                 Q_loss = (self.criterion(current_Q, update)).mean()
@@ -187,9 +189,9 @@ class dqn_agent:
             self.optimizer.zero_grad()
             Q_loss.backward()
             self.optimizer.step()
-            if self.memory.prioritized:
+            if self.buffer.prioritized:
                 priority = ((current_Q - update).abs() + 1e-10).pow(0.6).cpu().data.numpy().flatten()
-                self.memory.update_priority(ind, priority)
+                self.buffer.update_priority(ind, priority)
         
     
     def train(self, env, max_episode):
@@ -200,6 +202,8 @@ class dqn_agent:
         epsilon = self.epsilon_max
         step = 0
         best_model = 0
+        memory = deque()
+        
         while episode < max_episode:
             # update epsilon
             if step > self.epsilon_delay:
@@ -211,8 +215,23 @@ class dqn_agent:
                 action = greedy_action(self.model, state)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            self.memory.append(state, action, next_state, reward, done)
+            # self.buffer.append(state, action, next_state, reward, done)
+            memory.append((state, action, next_state, reward, done))
+            
             episode_cum_reward += reward
+            
+            # while len(memory) >= self.n_step_return or (memory and memory[-1][4]):
+            while len(memory) >= self.n_step_return : # Not the last one because the end is truncation ? 
+                s_mem, a_mem, si_, discount_R, done_ = memory.popleft()
+                if not done_ and memory:
+                    for i in range(self.n_step_return-1):
+                        si, ai, si_, ri, done_ = memory[i]
+                        discount_R += ri * self.gamma ** (i + 1)
+                        if done_:
+                            break
+                # self.buffer.append(state, action, next_state, reward, done)
+                self.buffer.append(s_mem, a_mem, si_, discount_R, 1 if not done_ else 0)
+
             # train
             for _ in range(self.nb_gradient_steps): 
                 self.gradient_step()
@@ -235,7 +254,7 @@ class dqn_agent:
                 episode_return.append(episode_cum_reward)
                 print("Episode ", '{:2d}'.format(episode), 
                         ", epsilon ", '{:6.2f}'.format(epsilon), 
-                        ", batch size ", '{:4d}'.format(self.memory.size), 
+                        ", batch size ", '{:4d}'.format(self.buffer.size), 
                         ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
                         sep='')
                     
@@ -302,6 +321,8 @@ config = {'nb_actions': env.action_space.n,
           'update_target_strategy': 'replace', # or 'ema'
           'update_target_freq': 400,
           'update_target_tau': 0.005,
+          'prioritized': False,
+          'n_step_return': 5,
           'criterion': torch.nn.SmoothL1Loss()
           }
 
