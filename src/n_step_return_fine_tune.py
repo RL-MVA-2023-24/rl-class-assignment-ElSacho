@@ -277,7 +277,7 @@ class dqn_agent:
             return np.random.choice(self.env.action_space.n)
         return greedy_action(self.model, observation)
     
-    def save(self, path = "prioritez_replay_r=f_p=t.pt"):
+    def save(self, path = "fine_tune_r=f_p=t.pt"):
         torch.save({
                     'model_state_dict': self.model.state_dict()
                     }, path)
@@ -307,7 +307,9 @@ class DQM_model(torch.nn.Module):
             x = self.activation(layer(x))
         return self.output_layer(x)
 
+checkpoint = torch.load("prioritez_replay_r=t.pt", map_location=torch.device('cpu'))
 model = DQM_model(6, 256, 4, 6).to(device)
+model.load_state_dict(checkpoint['model_state_dict'])
 # DQN config
 config = {'nb_actions': env.action_space.n,
           'learning_rate': 0.001,
@@ -328,20 +330,20 @@ config = {'nb_actions': env.action_space.n,
           }
 
 config = {'nb_actions': env.action_space.n,
-          'learning_rate': 0.001,
+          'learning_rate': 0.0005,
           'gamma': 0.99,
           'buffer_size': 100_000,
           'epsilon_min': 0.01,
-          'epsilon_max': 1.,
+          'epsilon_max': 0.1,
           'epsilon_decay_period': 50_000,
-          'epsilon_delay_decay': 5_000,
+          'epsilon_delay_decay': 1,
           'batch_size': 1000,
           'gradient_steps': 3,
           'update_target_strategy': 'replace', # or 'ema' # or 'replace'
-          'update_target_freq': 400,
+          'update_target_freq': 1200,
           'update_target_tau': 0.005,
           'prioritized': True,
-          'n_step_return': 5,
+          'n_step_return': 15,
           'criterion': torch.nn.SmoothL1Loss()
           }
 

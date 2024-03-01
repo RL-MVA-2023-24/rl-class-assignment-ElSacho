@@ -251,7 +251,7 @@ class M_DQN_Agent():
         tau_log_pi_next = Q_targets_next - Q_targets_next.max(1)[0].unsqueeze(-1) - entropy_tau*logsum
         # target policy
         pi_target = F.softmax(Q_targets_next/entropy_tau, dim=1)
-        Q_target = (self.GAMMA * (pi_target * (Q_targets_next-tau_log_pi_next)*(1 - dones)).sum(1)).unsqueeze(-1)
+        Q_target = (self.GAMMA * (pi_target * (Q_targets_next-tau_log_pi_next)*(dones)).sum(1)).unsqueeze(-1)
         
         # calculate munchausen addon with logsum trick
         q_k_targets = self.qnetwork_target(states).detach()
@@ -298,7 +298,7 @@ def eval_runs(eps, frame):
     Makes an evaluation run with the current epsilon
     """
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200
+        env=HIVPatient(domain_randomization=True), max_episode_steps=200
     )  # The time wrapper limits the number of steps in an episode at 200.
     # Now is the floor is yours to implement the agent and train it.
 
@@ -343,7 +343,7 @@ def run(frames=1000, eps_fixed=False, eps_frames=1e6, min_eps=0.01):
 
         action = agent.act(state, eps)
         next_state, reward, done, trunc, _ = env.step(action)
-        agent.step(state, action, reward/1_000_000, next_state, done)
+        agent.step(state, action, reward, next_state, done)
         state = next_state
         score += reward
         # linear annealing to the min epsilon value until eps_frames and from there slowly decease epsilon to 0 until the end of training
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200
+        env=HIVPatient(domain_randomization=True), max_episode_steps=200
     )  # The time wrapper limits the number of steps in an episode at 200.
     # Now is the floor is yours to implement the agent and train it.
 

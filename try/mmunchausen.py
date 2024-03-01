@@ -263,7 +263,7 @@ class DQN_Agent():
         Q_targets_next = Q_targets_next.detach().max(2)[0].unsqueeze(1) # (batch_size, 1, N)
         
         # Compute Q targets for current states 
-        Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next * (1. - dones.unsqueeze(-1)))
+        Q_targets = rewards.unsqueeze(-1) + (self.GAMMA**self.n_step * Q_targets_next * (dones.unsqueeze(-1)))
         # Get expected Q values from local model
         Q_expected, taus = self.qnetwork_local(states)
         Q_expected = Q_expected.gather(2, actions.unsqueeze(-1).expand(self.BATCH_SIZE, 8, 1))
@@ -393,12 +393,12 @@ if __name__ == "__main__":
     # writer = SummaryWriter("runs/"+"IQN_CP_5")
     seed = 5
     BUFFER_SIZE = 100000
-    BATCH_SIZE = 8
+    BATCH_SIZE = 1_000
     GAMMA = 1.0
     TAU = 1e-2
     LR = 1e-3
     UPDATE_EVERY = 1
-    n_step = 1
+    n_step = 5
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Using ", device)
 
@@ -410,7 +410,7 @@ if __name__ == "__main__":
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200
+        env=HIVPatient(domain_randomization=True), max_episode_steps=200
     )  # The time wrapper limits the number of steps in an episode at 200.
 
     # env.seed(seed)

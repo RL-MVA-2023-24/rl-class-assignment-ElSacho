@@ -61,27 +61,42 @@ config = {'nb_actions': env.action_space.n,
           'n_state_to_agg': 1
           }
 
-FILE_PATH = sys.argv[1]
+FILE_PATHS = []
+i=1
+while True:
+    try:
+        FILE_PATHS.append(sys.argv[i])
+        i+=1
+    except:
+        break
+print(FILE_PATHS)
 
 class TestAgent:
     def act(self, observation, use_random=False):
         if use_random:
             return np.random.choice(self.env.action_space.n)
-        return greedy_action(self.model, observation)
+        action_votes = [0,0,0,0]
+        for model in self.models:
+            action = greedy_action(model, observation)
+            action_votes[action] += 1
+        action_votes = np.array(action_votes)
+        return np.argmax(action_votes)
     
-    def save(self, path = FILE_PATH):
+    def save(self, path = FILE_PATHS):
         torch.save({
                     'model_state_dict': self.model.state_dict()
                     }, path)
 
     def load(self):
-        path = FILE_PATH
-        self.model = DQM_model(6, 256, 4, 6).to(device)
-        self.model.load_state_dict(torch.load(path)['model_state_dict'])
+        path = FILE_PATHS
+        self.models = []
+        for i in range(len(FILE_PATHS)):
+            self.models.append(DQM_model(6, 256, 4, 6).to(device))
+            self.models[i].load_state_dict(torch.load(FILE_PATHS[i])['model_state_dict'])
 
 agent = TestAgent()
 agent.load()
 score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
-score_agent_pop: float = evaluate_HIV_population(agent=agent, nb_episode=5)
+score_agent_pop: float = evaluate_HIV_population(agent=agent, nb_episode=10)
 print("Score default : ",locale.format_string('%d', int(score_agent), grouping=True))
 print("Score population : ",locale.format_string('%d', int(score_agent_pop), grouping=True))
