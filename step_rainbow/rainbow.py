@@ -15,7 +15,7 @@ import locale
 from collections import deque
 locale.setlocale(locale.LC_ALL, 'fr_FR')  # Définir la locale en français
 from models import DQM_model
-from models import DQM_model, Network, DuelingModel, DistribNet, RainbowNet
+from models import DQM_model, Network, DuelingModel
 import torch.nn.functional as F
 
 import gymnasium as gym
@@ -148,7 +148,6 @@ class dqn_agent:
     def __init__(self, config, model):
         device = "cuda" if next(model.parameters()).is_cuda else "cpu"
         self.device = device
-        self.config = config
         self.nb_actions = config['nb_actions']
         self.obs_space = config['obs_space']
         self.gamma = config['gamma'] if 'gamma' in config.keys() else 0.99
@@ -164,13 +163,7 @@ class dqn_agent:
         self.n_step_return = config['n_step_return'] if 'n_step_return' in config.keys() else 1
         self.model = model 
         self.double = config['double'] if 'double' in config.keys() else False
-        self.distributional = config['distributional'] if 'distributional' in config.keys() else False
-        self.n_atoms = config['n_atoms'] if 'n_atoms' in config.keys() else 50
-        self.v_min = config['v_min'] if 'v_min' in config.keys() else 0
-        self.v_max = config['v_max'] if 'v_max' in config.keys() else 200
         self.noisy = config['noisy'] if 'noisy' in config.keys() else False
-        self.normalize = config['normalize'] if 'normalize' in config.keys() else False
-        self.support = torch.linspace(v_min, v_max, n_atoms).to(device) if self.distributional else None
         self.target_model = deepcopy(self.model).to(device)
         self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
         lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
@@ -186,13 +179,8 @@ class dqn_agent:
         if self.buffer.size > self.batch_size:
             state, action, next_state, reward, done, ind, weights = self.buffer.sample()
             # TODO : Tout mettre dans la même brannche quand tout sera re implmenté
-            if self.distributional:
-                self.loss_distributional(state, action, next_state, reward, done, ind, weights) 
-                if self.noisy:
-                    self.model.reset_noise()
-                    self.target_model.reset_noise()
-            elif self.double:
-                self.compute_loss_double(state, action, next_state, reward, done, ind, weights) 
+            if self.double:
+                self.compute_loss_double(state, action, next_state, reward, done, ind, weights)
                 if self.noisy:
                     self.model.reset_noise()
                     self.target_model.reset_noise()
@@ -246,100 +234,13 @@ class dqn_agent:
         self.optimizer_target.zero_grad()
         loss2.backward()
         self.optimizer_target.step()
-        
-        if self.buffer.prioritized:
-            priority = ((curr_Q1 - next_Q).abs() + 1e-10).pow(0.6).cpu().data.numpy().flatten()
-            self.buffer.update_priority(ind, priority)
-            
-    def double_distributional(self, states, actions, next_states, rewards, dones, ind, weights):
-        # Categorical DQN algorithm
-        delta_z = float(self.v_max - self.v_min) / (self.atom_size - 1)
-        return
-        with torch.no_grad():
-            # Double DQN
-            next_action = self.dqn(next_state).argmax(1)
-            next_dist = self.dqn_target.dist(next_state)
-            next_dist = next_dist[range(self.batch_size), next_action]
-
-            t_z = reward +  dones * self.gamma * self.support
-            t_z = t_z.clamp(min=self.v_min, max=self.v_max)
-            b = (t_z - self.v_min) / delta_z
-            l = b.floor().long()
-            u = b.ceil().long()
-
-            offset = (
-                torch.linspace(
-                    0, (self.batch_size - 1) * self.atom_size, self.batch_size
-                ).long()
-                .unsqueeze(1)
-                .expand(self.batch_size, self.atom_size)
-                .to(self.device)
-            )
-
-            proj_dist = torch.zeros(next_dist.size(), device=self.device)
-            proj_dist.view(-1).index_add_(
-                0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1)
-            )
-            proj_dist.view(-1).index_add_(
-                0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1)
-            )
-
-        dist = self.dqn.dist(state)
-        log_p = torch.log(dist[range(self.batch_size), action])
-        elementwise_loss = -(proj_dist * log_p).sum(1)
-
-        return elementwise_loss
-        
-        
-        delta_z = float(self.v_max - self.v_min) / (self.n_atoms - 1)
-
-        with torch.no_grad():
-            next_action = self.model(next_states).argmax(1)
-            next_dist = self.target_model.dist(next_states)
-            next_dist = next_dist[range(self.batch_size), next_action]
-
-            t_z = rewards + dones * self.gamma * self.support
-            t_z = t_z.clamp(min=self.v_min, max=self.v_max)
-            b = (t_z - self.v_min) / delta_z
-            l = b.floor().long()
-            u = b.ceil().long()
-
-            offset = (
-                torch.linspace(
-                    0, (self.batch_size - 1) * self.n_atoms, self.batch_size
-                ).long()
-                .unsqueeze(1)
-                .expand(self.batch_size, self.n_atoms)
-                .to(self.device)
-            )
-
-            proj_dist = torch.zeros(next_dist.size(), device=self.device)
-            proj_dist.view(-1).index_add_(
-                0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1)
-            )
-            proj_dist.view(-1).index_add_(
-                0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1)
-            )
-
-        dist = self.model.dist(states)
-        log_p = torch.log(dist[range(self.batch_size), actions])
-        elementwise_loss = -(proj_dist * log_p).sum(1)
-        loss = elementwise_loss.mean()
-        
-        if self.buffer.prioritized:
-            priority = ((elementwise_loss).abs() + 1e-10).pow(0.6).cpu().data.numpy().flatten()
-            self.buffer.update_priority(ind, priority)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
     
-    def select_action(self, state, step, eval=False):
+    def select_action(self, state, step):
         if not self.noisy:
             if step > self.epsilon_delay:
                 self.epsilon = max(self.epsilon_min, self.epsilon-self.epsilon_step)
             # select epsilon-greedy action
-            if np.random.rand() < self.epsilon and not eval:
+            if np.random.rand() < self.epsilon:
                 action = env.action_space.sample()
             else:
                 action = greedy_action(self.model, state)
@@ -349,60 +250,11 @@ class dqn_agent:
             action = action.detach().cpu().numpy()
         return action
     
-    def loss_distributional(self, states, actions, next_states, rewards, dones, ind = None, weights = None):
-        """Return categorical dqn loss."""    
-        # Categorical DQN algorithm
-        delta_z = float(self.v_max - self.v_min) / (self.n_atoms - 1)
-
-        with torch.no_grad():
-            next_action = self.model(next_states).argmax(1)
-            next_dist = self.target_model.dist(next_states)
-            next_dist = next_dist[range(self.batch_size), next_action]
-
-            t_z = rewards + dones * self.gamma * self.support
-            t_z = t_z.clamp(min=self.v_min, max=self.v_max)
-            b = (t_z - self.v_min) / delta_z
-            l = b.floor().long()
-            u = b.ceil().long()
-
-            offset = (
-                torch.linspace(
-                    0, (self.batch_size - 1) * self.n_atoms, self.batch_size
-                ).long()
-                .unsqueeze(1)
-                .expand(self.batch_size, self.n_atoms)
-                .to(self.device)
-            )
-
-            proj_dist = torch.zeros(next_dist.size(), device=self.device)
-            proj_dist.view(-1).index_add_(
-                0, (l + offset).view(-1), (next_dist * (u.float() - b)).view(-1)
-            )
-            proj_dist.view(-1).index_add_(
-                0, (u + offset).view(-1), (next_dist * (b - l.float())).view(-1)
-            )
-
-        dist = self.model.dist(states)
-        log_p = torch.log(dist[range(self.batch_size), actions])
-
-        elementwise_loss = -(proj_dist * log_p).sum(1)
-        loss = elementwise_loss.mean()
-        
-        if self.buffer.prioritized:
-            priority = ((elementwise_loss).abs() + 1e-10).pow(0.6).cpu().data.numpy().flatten()
-            self.buffer.update_priority(ind, priority)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-    
     def train(self, env, max_episode):
         episode_return = []
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
-        if self.normalize:
-            state *= 1e-5
         self.epsilon = self.epsilon_max
         step = 0
         best_model = 0
@@ -413,9 +265,6 @@ class dqn_agent:
             action = self.select_action(state, step)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            if self.normalize:
-                next_state *= 1e-5
-                reward *= 1e-5
             episode_cum_reward += reward
             if self.n_step_return == 1:
                 self.buffer.append(state, action, next_state, reward, done)
@@ -457,8 +306,9 @@ class dqn_agent:
                 print("Episode ", '{:2d}'.format(episode), 
                         ", epsilon ", '{:6.2f}'.format(self.epsilon), 
                         ", batch size ", '{:4d}'.format(self.buffer.size), 
-                        ", ep return ", locale.format_string('%d', int(episode_cum_reward *1e5), grouping=True),
+                        ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
                         sep='')
+                    
                 try:
                     score_agent: float = evaluate_HIV(agent=self, nb_episode=1)
                     print(locale.format_string('%d', int(score_agent), grouping=True))
@@ -470,8 +320,6 @@ class dqn_agent:
                     # print("Could not test in the HIV; maybe it is Cartpole")
                 
                 state, _ = env.reset()
-                if self.normalize:
-                    state *= 1e-5
                 episode_cum_reward = 0
             else:
                 state = next_state
@@ -481,13 +329,12 @@ class dqn_agent:
     def act(self, observation, use_random=False):
         if use_random:
             return np.random.choice(self.env.action_space.n)
-        return self.select_action(observation, 1, True)
+        return greedy_action(self.model, observation)
     
-    def save(self, path = "distributional.pt"):
+    def save(self, path = "r_just_d.pt"):
         torch.save({
-                    'model_state_dict': self.model.state_dict(),
-                    'conf' : self.config
-                    }, self.config['save_path'])
+                    'model_state_dict': self.model.state_dict()
+                    }, path)
 
     def load(self):
         path = "prioritez_replay.pt"
@@ -527,43 +374,8 @@ config = {'nb_actions': env.action_space.n,
           'noisy': False,
           'double' : True,
           'dueling' : True,
-          'distributional' : True,
-          'v_min' : 0,
-          'v_max' : 3e3,
-          'n_atoms' : 75,
-          'normalize' : True,
-          'criterion': torch.nn.SmoothL1Loss(),
-          'save_path' : 'all_but_noisy.pt'
+          'criterion': torch.nn.SmoothL1Loss()
           }
-
-# config = {'nb_actions': env.action_space.n,
-#           'obs_space': env.observation_space.shape[0],
-#           'learning_rate': 0.001,
-#           'gamma': 0.999,
-#           'buffer_size': 200_000,
-#           'epsilon_min': 0.01,
-#           'epsilon_max': 1.,
-#           'epsilon_decay_period': 50_000,
-#           'epsilon_delay_decay': 5_000,
-#           'batch_size': 1000,
-#           'gradient_steps': 3,
-#           'update_target_strategy': 'replace', # or 'ema'
-#           'update_target_freq': 600,
-#           'update_target_tau': 0.005,
-#           'n_layers' : 6,
-#           'prioritized': False,
-#           'n_step_return': 5,
-#           'noisy': True,
-#           'double' : True,
-#           'dueling' : True,
-#           'distributional' : True,
-#           'v_min' : 0,
-#           'v_max' : 3e3,
-#           'n_atoms' : 75,
-#           'normalize' : True,
-#           'criterion': torch.nn.SmoothL1Loss(),
-#           'save_path' : 'all_but_PER.pt'
-#           }
 
 # config = {'nb_actions': env.action_space.n,
 #           'learning_rate': 0.001,
@@ -582,31 +394,24 @@ config = {'nb_actions': env.action_space.n,
 #           'n_layers' : 6,
 #           'prioritized': True,
 #           'n_step_return': 1,
-#           'noisy': True,
+#           'noisy': False,
 #           'noisy_std_init' : 0.5,
 #           'dueling' : True,
 #           'double' : True,
-#           'distributional' : True,
-#           'v_min' : 0,
-#           'v_max' : 200,
-#           'n_atoms' : 51,
-#           'normalize' : False,
 #           'criterion': torch.nn.SmoothL1Loss()
-#           }
+        #   }
 
-
-v_min = config['v_min']
-config['v_max'] = config['v_max'] * config['n_step_return']
-v_max = config['v_max']
-n_atoms = config['n_atoms']
-support = torch.linspace(v_min, v_max, n_atoms).to(device)
-model = RainbowNet(config['obs_space'], 256, config['nb_actions'], n_atoms, 4, support, config['noisy'], dueling=config['dueling']).to(device)
+if config['dueling']:
+    model = DuelingModel(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+else:
+    # model = DQM_model(6, 256, 4, 6).to(device)
+    model = DQM_model(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
 
 # Train agent
 agent = dqn_agent(config, model)
-ep_return = agent.train(env, 2000000)
+ep_return = agent.train(env, 200000)
 
-# # # Plotting the data
+# # Plotting the data
 # plt.figure(figsize=(10, 6))
 # plt.plot(ep_return, label='Noisy', marker='o')
 
@@ -619,9 +424,9 @@ ep_return = agent.train(env, 2000000)
 # # Showing the plot
 # plt.show()
 
-# # # DOUBLE - > OK
-# # # N-STEP -> OK
-# # # DUELING -> OK
-# # # PER -> OK ? 
-# # # NOISY -> OK
-# # # Distributional -> TO DO 
+# # DOUBLE - > OK
+# # N-STEP -> OK
+# # DUELING -> OK
+# # PER -> OK ? 
+# # NOISY -> OK
+# # Distributional -> TO DO 

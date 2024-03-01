@@ -5,6 +5,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
+from models import DQM_model, RainbowNet, DuelingModel
 from tqdm import tqdm
 from evaluate import evaluate_HIV, evaluate_HIV_population
 import numpy as np
@@ -28,39 +29,6 @@ def greedy_action(network, state):
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
 
-class DQM_model(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, depth):
-        super(DQM_model, self).__init__()
-        self.input_layer = torch.nn.Linear(input_dim, hidden_dim)
-        self.hidden_layers = torch.nn.ModuleList([torch.nn.Linear(hidden_dim, hidden_dim) for _ in range(depth - 1)])
-        self.output_layer = torch.nn.Linear(hidden_dim, output_dim)
-        self.activation = torch.nn.ReLU()
-        
-    def forward(self, x):
-        x = self.activation(self.input_layer(x))
-        for layer in self.hidden_layers:
-            x = self.activation(layer(x))
-        return self.output_layer(x)
-
-
-# DQN config
-config = {'nb_actions': env.action_space.n,
-          'learning_rate': 0.001,
-          'gamma': 0.99,
-          'buffer_size': 30_000,
-          'epsilon_min': 0.07,
-          'epsilon_max': 1.,
-          'epsilon_decay_period': 30_000,
-          'epsilon_delay_decay': 4_000,
-          'batch_size': 1000,
-          'gradient_steps': 3,
-          'update_target_strategy': 'replace', # or 'ema'
-          'update_target_freq': 400,
-          'update_target_tau': 0.005,
-          'criterion': torch.nn.MSELoss(),
-          'n_state_to_agg': 1
-          }
-
 FILE_PATH = sys.argv[1]
 
 class TestAgent:
@@ -76,7 +44,19 @@ class TestAgent:
 
     def load(self):
         path = FILE_PATH
-        self.model = DQM_model(6, 256, 4, 6).to(device)
+        config = torch.load(path)['conf']
+        v_min = config['v_min']
+        config['v_max'] = config['v_max'] * config['n_step_return']
+        v_max = config['v_max']
+        n_atoms = config['n_atoms']
+        support = torch.linspace(v_min, v_max, n_atoms).to(device)
+        if config['distributional']:
+            self.model = RainbowNet(config['obs_space'], 256, config['nb_actions'], n_atoms, 4, support, config['noisy'], dueling=config['dueling']).to(device)
+        elif config['dueling']:
+            self.model = DuelingModel(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+        else:
+            self.model = DQM_model(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+        
         self.model.load_state_dict(torch.load(path)['model_state_dict'])
 
 agent = TestAgent()
