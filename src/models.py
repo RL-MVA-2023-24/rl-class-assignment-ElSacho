@@ -1,11 +1,8 @@
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
-import random
 import torch
 import numpy as np
 import torch.nn as nn
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 from evaluate import evaluate_HIV, evaluate_HIV_population
 import numpy as np
 import torch
