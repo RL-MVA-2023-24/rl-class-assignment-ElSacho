@@ -29,7 +29,8 @@ def greedy_action(network, state):
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
 
-FILE_PATH = sys.argv[1]
+# FILE_PATH = sys.argv[1]
+FILE_PATH = "src/double_and_n.pt"
 
 class TestAgent:
     def act(self, observation, use_random=False):

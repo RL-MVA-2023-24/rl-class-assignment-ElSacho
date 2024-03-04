@@ -6,6 +6,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from models import DQM_model, RainbowNet, DuelingModel
 
 def greedy_action(network, state):
     device = "cuda" if next(network.parameters()).is_cuda else "cpu"
@@ -62,14 +63,23 @@ class ProjectAgent:
                     }, path)
 
     def load(self):
-        print("loading")
-        checkpoint = torch.load("src/double_and_n.pt", map_location=torch.device('cpu'))
-        self.model = DQM_model(6, 256, 4, 6).to(device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        path = "src/double_and_n.pt"
+        config = torch.load(path)['conf']
+        v_min = config['v_min']
+        config['v_max'] = config['v_max'] * config['n_step_return']
+        v_max = config['v_max']
+        n_atoms = config['n_atoms']
+        support = torch.linspace(v_min, v_max, n_atoms).to(device)
+        if config['distributional']:
+            self.model = RainbowNet(config['obs_space'], 256, config['nb_actions'], n_atoms, 4, support, config['noisy'], dueling=config['dueling']).to(device)
+        elif config['dueling']:
+            self.model = DuelingModel(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+        else:
+            self.model = DQM_model(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+        
+        self.model.load_state_dict(torch.load(path)['model_state_dict'])
         self.model.eval()
         
         # etat_du_modele = torch.load("src/DQN_simple.pt", map_location=torch.device('cpu'))
         # self.model.load_state_dict(etat_du_modele)
         # self.model.eval()
-        
-        
