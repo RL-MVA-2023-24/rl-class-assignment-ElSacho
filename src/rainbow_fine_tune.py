@@ -145,7 +145,16 @@ def greedy_action(network, state):
     with torch.no_grad():
         Q = network(torch.Tensor(state).unsqueeze(0).to(device))
         return torch.argmax(Q).item()
-
+    
+def softmax_action(network, state):
+    device = "cuda" if next(network.parameters()).is_cuda else "cpu"
+    with torch.no_grad():
+        Q = network(torch.Tensor(state).unsqueeze(0).to(device))
+        probabilities = F.softmax(Q, dim=1)
+        m = torch.distributions.Categorical(probabilities)
+        action = m.sample()
+        return action.item()
+    
 class dqn_agent:
     def __init__(self, config, model):
         device = "cuda" if next(model.parameters()).is_cuda else "cpu"
@@ -354,12 +363,10 @@ class dqn_agent:
         loss.backward()
         self.optimizer.step()
     
-    def select_action(self, state, step, eval=False):
+    def select_action(self, state, step, episode=1, eval=False):
         if not self.noisy:
-            if step > self.epsilon_delay:
-                self.epsilon = max(self.epsilon_min, self.epsilon-self.epsilon_step)
             # select epsilon-greedy action
-            if np.random.rand() < self.epsilon and not eval:
+            if np.random.rand() < self.epsilon and not eval and episode % 3 != 0:
                 action = env.action_space.sample()
             else:
                 action = greedy_action(self.model, state)
@@ -423,21 +430,21 @@ class dqn_agent:
         timestamp = time.strftime("%Y-%m-%d--%H%M")
         expt_name = self.config["save_path"][:-3]
         print("Saving with the name ", expt_name)
-        writer = SummaryWriter(f'logs/{expt_name}-{timestamp}')
+        writer = SummaryWriter(f'logs/ft_{expt_name}-{timestamp}')
         episode_return = []
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
         if self.normalize:
             state = self.normalize_state(state)
-        self.epsilon = self.epsilon_max
+        self.epsilon = 0.05
         step = 0
         best_model = 0
         memory = deque()
         
         while episode < max_episode:
             # update epsilon
-            action = self.select_action(state, step)
+            action = self.select_action(state, step, episode)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
             episode_cum_reward += reward
@@ -482,20 +489,27 @@ class dqn_agent:
                 # Monitoring
                 episode_return.append(episode_cum_reward)
                 writer.add_scalar('ep_rew_actual', episode_cum_reward, episode)
+            
+                if episode_cum_reward > best_model:
+                    agent.save()
+                    best_model = episode_cum_reward
+                
                 print("Episode ", '{:2d}'.format(episode), 
                         ", epsilon ", '{:6.2f}'.format(self.epsilon), 
                         ", batch size ", '{:4d}'.format(self.buffer.size), 
+                        ", best return ", locale.format_string('%d', int(best_model), grouping=True),
                         ", ep return ", locale.format_string('%d', int(episode_cum_reward), grouping=True),
                         sep='')
-                try:
-                    score_agent: float = evaluate_HIV(agent=self, nb_episode=1)
-                    print("Result : ", locale.format_string('%d', int(score_agent), grouping=True), " and best result yet : ", locale.format_string('%d', int(best_model), grouping=True))
-                    writer.add_scalar('ep_rew_default', score_agent, episode)
-                    if score_agent > best_model:
-                        agent.save()
-                        best_model = score_agent
-                except:
-                    pass
+                
+                # try:
+                #     score_agent: float = evaluate_HIV(agent=self, nb_episode=1)
+                #     print("Result : ", locale.format_string('%d', int(score_agent), grouping=True), " and best result yet : ", locale.format_string('%d', int(best_model), grouping=True))
+                #     writer.add_scalar('ep_rew_default', score_agent, episode)
+                #     if score_agent > best_model:
+                #         agent.save()
+                #         best_model = score_agent
+                # except:
+                #     pass
                     # print("Could not test in the HIV; maybe it is Cartpole")
                 state, _ = env.reset()
                 if self.normalize:
@@ -517,7 +531,7 @@ class dqn_agent:
         torch.save({
                     'model_state_dict': self.model.state_dict(),
                     'conf' : self.config
-                    }, self.config['save_path'])
+                    }, "ft_"+self.config['save_path'])
 
     def load(self):
         path = "prioritez_replay.pt"
@@ -527,7 +541,7 @@ class dqn_agent:
 if __name__ == "__main__":
     
     env = TimeLimit(
-        env=HIVPatient(domain_randomization=True), max_episode_steps=200
+        env=HIVPatient(domain_randomization=False), max_episode_steps=200
     )  
 
     state_dim = env.observation_space.shape[0]
@@ -586,6 +600,7 @@ if __name__ == "__main__":
         model = DuelingModel(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
     else:
         model = DQM_model(config['obs_space'], 256, config['nb_actions'], 6, noisy=config['noisy']).to(device)
+    model.load_state_dict(torch.load( config.get('load_path', config['save_path']) )['model_state_dict'])
 
     # Train agent
     agent = dqn_agent(config, model)
